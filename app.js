@@ -3,7 +3,6 @@ const sqlite = require("sqlite");
 const sqlite3 = require("sqlite3");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
-const dateFns = require("date-fns");
 
 const app = express();
 app.use(express.json());
@@ -64,31 +63,6 @@ const conversionOfDBObjectToResponseObjectForAPI9 = (dbObject) => {
     replies: dbObject.replies,
     dateTime: dbObject.date_time,
   };
-};
-
-const isValidStatus = (request, response, next) => {
-  let statusFromQueryOrBody;
-  const { status } = request.query;
-  statusFromQueryOrBody = status;
-  //   console.log(statusFromQueryOrBody);
-  if (statusFromQueryOrBody === undefined) {
-    // console.log("Request Body");
-    let { status } = request.body;
-    statusFromQueryOrBody = status;
-  }
-  //   console.log(statusFromQueryOrBody);
-
-  if (statusFromQueryOrBody !== undefined) {
-    if (["TO DO", "IN PROGRESS", "DONE"].includes(statusFromQueryOrBody)) {
-      //   console.log("validated");
-      next();
-    } else {
-      response.status(400);
-      response.send("Invalid Todo Status");
-    }
-  } else {
-    next();
-  }
 };
 
 // API-1 To Register the User
