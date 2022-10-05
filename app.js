@@ -82,7 +82,7 @@ app.post("/register/", async (request, response) => {
   //   console.log(usersInDatabase);
   if (usersInDatabase.length === 0) {
     // console.log(length(password));
-    if (password.length < 5) {
+    if (password.length < 6) {
       response.status(400);
       response.send("Password is too short");
     } else {
@@ -147,59 +147,40 @@ app.post("/login/", async (request, response) => {
 //Authentication with JWT Token
 const authenticateUser = (request, response, next) => {
   //   console.log(request.headers);
-  const jwtToken = request.headers["authorization"].split(" ")[1];
-  //   console.log(jwtToken);
-  if (jwtToken === undefined) {
+  if (request.headers["authorization"] === undefined) {
     // console.log("No Token");
     response.status(401);
     response.send("Invalid JWT Token");
   } else {
-    jwt.verify(jwtToken, "THE SECRET KEY", async (error, payload) => {
-      if (error) {
-        // console.log("error");
-        response.status(401);
-        response.send("Invalid JWT Token");
-      } else {
-        // console.log("SSS");
-        request.username = payload.username;
-        next();
-      }
-    });
+    const jwtToken = request.headers["authorization"].split(" ")[1];
+    // console.log(jwtToken);
+    if (jwtToken === undefined) {
+      // console.log("No Token");
+      response.status(401);
+      response.send("Invalid JWT Token");
+    } else {
+      jwt.verify(jwtToken, "THE SECRET KEY", async (error, payload) => {
+        if (error) {
+          // console.log("error");
+          response.status(401);
+          response.send("Invalid JWT Token");
+        } else {
+          // console.log("SSS");
+          request.username = payload.username;
+          next();
+        }
+      });
+    }
   }
 };
 
-// API-3 Returns the latest tweets of people whom the user follows. Return 4 tweets at a time
-
-app.get("/user/tweets/feed/", authenticateUser, async (request, response) => {
-  //   console.log(request.username);
-  const username = request.username;
-  //   console.log(username);
-  const getLatestTweetsQuery = `
-                            select 
-                                * 
-                            from 
-                                tweet natural join user
-                            where
-                                username like '%${username}%'
-                            limit 4
-                            ;`;
-
-  const latestTweetsArray = await db.all(getLatestTweetsQuery);
-  const responseLatestTweetsArray = latestTweetsArray.map((eachTweet) =>
-    conversionOfDBObjectToResponseObjectForAPI3(eachTweet)
-  );
-  response.send(responseLatestTweetsArray);
-});
-
-// API-4 Returns the list of all names of people whom the user follows
-
-app.get("/user/following/", authenticateUser, async (request, response) => {
-  //   console.log(request.username);
+//Returns the followings list
+const followingsOfUser = async (request, response, next) => {
   const username = request.username;
   //   console.log(username);
   const getFollowingQuery = `
                                 select
-                                    DISTINCT user.name
+                                    *
                                 from
                                 (select 
                                     *
@@ -208,13 +189,66 @@ app.get("/user/following/", authenticateUser, async (request, response) => {
                                 where
                                     username like '%${username}%') as T inner join user on T.following_user_id = user.user_id
                             ;`;
-
   const followingsArray = await db.all(getFollowingQuery);
-  const responseFollowingsArray = followingsArray.map((eachFollowing) =>
-    conversionOfDBObjectToResponseObjectForAPI4(eachFollowing)
-  );
-  response.send(responseFollowingsArray);
-});
+  request.followingsArray = followingsArray;
+  next();
+};
+
+// API-3 Returns the latest tweets of people whom the user follows. Return 4 tweets at a time
+
+app.get(
+  "/user/tweets/feed/",
+  authenticateUser,
+  followingsOfUser,
+  async (request, response) => {
+    //   console.log(request.username);
+    const username = request.username;
+    //   console.log(username);
+    const followingsArray = request.followingsArray;
+    // console.log(followingsArray);
+    let listOfFollowingsUserIds = [];
+    followingsArray.map((eachItem) => {
+      //   console.log(eachItem);
+      listOfFollowingsUserIds.push(eachItem.user_id);
+    });
+    // console.log(listOfFollowingsUserIds);
+    const getLatestTweetsQuery = `
+                            select 
+                                * 
+                            from 
+                                tweet natural join user
+                            where
+                                user_id in (${listOfFollowingsUserIds})
+                            ORDER BY
+                                date_time
+                            limit 4
+                            ;`;
+
+    const latestTweetsArray = await db.all(getLatestTweetsQuery);
+    // console.log(latestTweetsArray);
+    const responseLatestTweetsArray = latestTweetsArray.map((eachTweet) =>
+      conversionOfDBObjectToResponseObjectForAPI3(eachTweet)
+    );
+    response.send(responseLatestTweetsArray);
+  }
+);
+
+// API-4 Returns the list of all names of people whom the user follows
+
+app.get(
+  "/user/following/",
+  authenticateUser,
+  followingsOfUser,
+  async (request, response) => {
+    //   console.log(request.username);
+    const followingsArray = request.followingsArray;
+    // console.log(followingsArray);
+    const responseFollowingsArray = followingsArray.map((eachFollowing) =>
+      conversionOfDBObjectToResponseObjectForAPI4(eachFollowing)
+    );
+    response.send(responseFollowingsArray);
+  }
+);
 
 // API-5 Returns the list of all names of people who follows the user
 
@@ -243,13 +277,43 @@ app.get("/user/followers/", authenticateUser, async (request, response) => {
 
 // API-6 Returns the a specific tweet
 
-app.get("/tweets/:tweetId/", authenticateUser, async (request, response) => {
-  //   console.log(request.username);
-  const username = request.username;
-  const { tweetId } = request.params;
-  //   console.log(username);
-  //check if user follows the tweeted user
-  const tweetDetailsQuery = `
+app.get(
+  "/tweets/:tweetId/",
+  authenticateUser,
+  followingsOfUser,
+  async (request, response) => {
+    //   console.log(request.username);
+    const username = request.username;
+    const { tweetId } = request.params;
+    //   console.log(username);
+
+    //check if user follows the tweeted user - First Approach
+    const followingsArray = request.followingsArray;
+    // console.log(followingsArray);
+    const tweetedUserQuery = `SELECT
+                                    *
+                                FROM
+                                    tweet
+                                where 
+                                    tweet_id = ${tweetId}
+                                ;`;
+    const tweetUserDetailsArray = await db.get(tweetedUserQuery);
+    //   console.log(tweetUserDetailsArray);
+    let iterationCounter = 0;
+    const userFollowsTweeter = followingsArray.map((eachItem) => {
+      //   console.log(eachItem);
+      if (eachItem.user_id === tweetUserDetailsArray.user_id) {
+        return true;
+      }
+      iterationCounter = iterationCounter + 1;
+    });
+    if (iterationCounter === followingsArray.length) {
+      response.status(401);
+      response.send("Invalid Request");
+    }
+
+    //check if user follows the tweeted user
+    const tweetDetailsQuery = `
                                 SELECT
                                     tweet, count(DISTINCT like_id) as likes, count(DISTINCT reply_id) as replies, date_time
                                 FROM
@@ -274,18 +338,20 @@ app.get("/tweets/:tweetId/", authenticateUser, async (request, response) => {
                                             tweet_id = '${tweetId}') AS V inner join reply on V.tweet_id = reply.tweet_id)                                    
                                         AS Q inner join like on Q.tweet_id = like.tweet_id
                                 ;`;
-  const tweetDetailsQueryArray = await db.all(tweetDetailsQuery);
-  //   console.log(tweetDetailsQueryArray.length);
-  if (tweetDetailsQueryArray.length === 0) {
-    response.status(401);
-    response.send("Invalid Request");
+    const tweetDetailsQueryArray = await db.all(tweetDetailsQuery);
+    //   console.log(tweetDetailsQueryArray.length);
+    if (tweetDetailsQueryArray.length === 0) {
+      response.status(401);
+      response.send("Invalid Request");
+    }
+    //   console.log(tweetDetailsQueryArray);
+    const responseTweetDetailsQueryArray = tweetDetailsQueryArray.map(
+      (eachResponse) =>
+        conversionOfDBObjectToResponseObjectForAPI6(eachResponse)
+    );
+    response.send(responseTweetDetailsQueryArray[0]);
   }
-  //   console.log(tweetDetailsQueryArray);
-  const responseTweetDetailsQueryArray = tweetDetailsQueryArray.map(
-    (eachResponse) => conversionOfDBObjectToResponseObjectForAPI6(eachResponse)
-  );
-  response.send(responseTweetDetailsQueryArray[0]);
-});
+);
 
 // API-7 Returns the list of usernames who liked the tweet
 
@@ -297,8 +363,36 @@ app.get(
     const username = request.username;
     const { tweetId } = request.params;
     //   console.log(username);
-    //check if user follows the tweeted user
-    const tweetDetailsQuery = `
+    //check if user follows the tweeted user - First Approach
+    const followingsArray = request.followingsArray;
+    if (followingsArray === undefined) {
+      response.status(401);
+      response.send("Invalid Request");
+    } else {
+      // console.log(followingsArray);
+      const tweetedUserQuery = `SELECT
+                                    *
+                                FROM
+                                    tweet
+                                where 
+                                    tweet_id = ${tweetId}
+                                ;`;
+      const tweetUserDetailsArray = await db.get(tweetedUserQuery);
+      //   console.log(tweetUserDetailsArray);
+      let iterationCounter = 0;
+      const userFollowsTweeter = followingsArray.map((eachItem) => {
+        //   console.log(eachItem);
+        if (eachItem.user_id === tweetUserDetailsArray.user_id) {
+          return true;
+        }
+        iterationCounter = iterationCounter + 1;
+      });
+      if (iterationCounter === followingsArray.length) {
+        response.status(401);
+        response.send("Invalid Request");
+      }
+      //check if user follows the tweeted user
+      const tweetDetailsQuery = `
                                 SELECT
                                     username
                                 FROM
@@ -328,20 +422,21 @@ app.get(
                                     AS W inner join like on W.tweet_id = like.tweet_id)
                                 AS X natural join user
                                 ;`;
-    const tweetDetailsQueryArray = await db.all(tweetDetailsQuery);
-    // console.log(tweetDetailsQueryArray.length);
-    if (tweetDetailsQueryArray.length === 0) {
-      response.status(401);
-      response.send("Invalid Request");
+      const tweetDetailsQueryArray = await db.all(tweetDetailsQuery);
+      // console.log(tweetDetailsQueryArray.length);
+      if (tweetDetailsQueryArray.length === 0) {
+        response.status(401);
+        response.send("Invalid Request");
+      }
+      // console.log(tweetDetailsQueryArray);
+      let responseTweetDetailsQueryArray = [];
+      const conversionToList = tweetDetailsQueryArray.map((eachResponse) => {
+        conversionOfDBObjectToResponseObjectForAPI6(eachResponse);
+        responseTweetDetailsQueryArray.push(eachResponse.username);
+      });
+      // console.log(responseTweetDetailsQueryArray);
+      response.send({ likes: [...responseTweetDetailsQueryArray] });
     }
-    // console.log(tweetDetailsQueryArray);
-    let responseTweetDetailsQueryArray = [];
-    const conversionToList = tweetDetailsQueryArray.map((eachResponse) => {
-      conversionOfDBObjectToResponseObjectForAPI6(eachResponse);
-      responseTweetDetailsQueryArray.push(eachResponse.username);
-    });
-    // console.log(responseTweetDetailsQueryArray);
-    response.send({ likes: [...responseTweetDetailsQueryArray] });
   }
 );
 
@@ -350,13 +445,42 @@ app.get(
 app.get(
   "/tweets/:tweetId/replies/",
   authenticateUser,
+  followingsOfUser,
   async (request, response) => {
     //   console.log(request.username);
     const username = request.username;
     const { tweetId } = request.params;
     //   console.log(username);
-    //check if user follows the tweeted user
-    const tweetDetailsQuery = `
+    //check if user follows the tweeted user - First Approach
+    const followingsArray = request.followingsArray;
+    // console.log(followingsArray);
+    const tweetedUserQuery = `SELECT
+                                    *
+                                FROM
+                                    tweet
+                                where 
+                                    tweet_id = ${tweetId}
+                                ;`;
+    const tweetUserDetailsArray = await db.get(tweetedUserQuery);
+    //   console.log(tweetUserDetailsArray);
+    let iterationCounter = 0;
+    const userFollowsTweeter = followingsArray.map((eachItem) => {
+      //   console.log(eachItem);
+      if (eachItem.user_id === tweetUserDetailsArray.user_id) {
+        return true;
+      }
+      iterationCounter = iterationCounter + 1;
+    });
+    if (iterationCounter === followingsArray.length) {
+      response.status(401);
+      response.send("Invalid Request");
+    }
+    if (followingsArray === undefined) {
+      response.status(401);
+      response.send("Invalid Request");
+    } else {
+      //check if user follows the tweeted user
+      const tweetDetailsQuery = `
                                 SELECT
                                     *
                                 FROM
@@ -386,22 +510,23 @@ app.get(
                                     AS W inner join like on W.tweet_id = like.tweet_id)
                                 AS X natural join user
                                 ;`;
-    const tweetDetailsQueryArray = await db.all(tweetDetailsQuery);
-    // console.log(tweetDetailsQueryArray.length);
-    if (tweetDetailsQueryArray.length === 0) {
-      response.status(401);
-      response.send("Invalid Request");
+      const tweetDetailsQueryArray = await db.all(tweetDetailsQuery);
+      // console.log(tweetDetailsQueryArray.length);
+      if (tweetDetailsQueryArray.length === 0) {
+        response.status(401);
+        response.send("Invalid Request");
+      }
+      // console.log(tweetDetailsQueryArray);
+      let responseTweetDetailsQueryArray = [];
+      const conversionToList = tweetDetailsQueryArray.map((eachResponse) => {
+        const listObject = conversionOfDBObjectToResponseObjectForAPI8(
+          eachResponse
+        );
+        responseTweetDetailsQueryArray.push(listObject);
+      });
+      // console.log(responseTweetDetailsQueryArray);
+      response.send({ replies: [...responseTweetDetailsQueryArray] });
     }
-    // console.log(tweetDetailsQueryArray);
-    let responseTweetDetailsQueryArray = [];
-    const conversionToList = tweetDetailsQueryArray.map((eachResponse) => {
-      const listObject = conversionOfDBObjectToResponseObjectForAPI8(
-        eachResponse
-      );
-      responseTweetDetailsQueryArray.push(listObject);
-    });
-    // console.log(responseTweetDetailsQueryArray);
-    response.send({ replies: [...responseTweetDetailsQueryArray] });
   }
 );
 
@@ -442,7 +567,7 @@ app.get("/user/tweets/", authenticateUser, async (request, response) => {
     response.status(401);
     response.send("Invalid Request");
   }
-  //   console.log(tweetDetailsQueryArray);
+  console.log(tweetDetailsQueryArray);
   let responseTweetDetailsQueryArray = [];
   const conversionToList = tweetDetailsQueryArray.map((eachResponse) => {
     const listObject = conversionOfDBObjectToResponseObjectForAPI9(
@@ -462,10 +587,23 @@ app.post("/user/tweets/", authenticateUser, async (request, response) => {
   const { tweet } = request.body;
   //   console.log(tweet);
   //   console.log(username);
-  const currentDateTime = dateFns.format(
-    new Date(Date.now()),
-    "yyyy-MM-dd HH:mm:ss"
-  );
+  var currentDateTime = new Date();
+  //   console.log(currentDateTime);
+  var date =
+    currentDateTime.getFullYear() +
+    "-" +
+    (currentDateTime.getMonth() + 1) +
+    "-" +
+    currentDateTime.getDate();
+
+  var time =
+    currentDateTime.getHours() +
+    ":" +
+    currentDateTime.getMinutes() +
+    ":" +
+    currentDateTime.getSeconds();
+  var dateTime = date + " " + time;
+  //   console.log(dateTime);
   //Getting user_id from username
   const userIdQuery = `
                             SELECT
@@ -478,14 +616,13 @@ app.post("/user/tweets/", authenticateUser, async (request, response) => {
   const userIdFromDB = await db.get(userIdQuery);
   const { user_id } = userIdFromDB;
   //   console.log(user_id);
-
   const createTweetQuery = `
                               INSERT INTO tweet
                                 (tweet,user_id,date_time)
                             values
-                                ('${tweet}',${user_id},'${currentDateTime}')
+                                ('${tweet}',${user_id},'${dateTime}')
                             ;`;
-  await db.all(createTweetQuery);
+  let result = await db.run(createTweetQuery);
   response.send("Created a Tweet");
 });
 
@@ -520,23 +657,24 @@ app.delete("/tweets/:tweetId/", authenticateUser, async (request, response) => {
   if (userIdOfTweet === undefined) {
     response.status(401);
     response.send("Invalid Request");
-  }
-
-  if (userIdOfLoggedInUser.user_id === userIdOfTweet.user_id) {
-    const deleteTweetQuery = `
+  } else {
+    // console.log(userIdOfLoggedInUser.user_id === userIdOfTweet.user_id);
+    if (userIdOfLoggedInUser.user_id === userIdOfTweet.user_id) {
+      const deleteTweetQuery = `
                             DELETE
                             FROM
                                 tweet
                             where
                                 tweet_id ='${tweetId}'
                             ;`;
-    await db.get(deleteTweetQuery);
-    response.send(200);
-    response.send("Tweet Removed");
-  } else {
-    // console.log("FALSE");
-    response.status(401);
-    response.send("Invalid Request");
+      let result = await db.run(deleteTweetQuery);
+      response.status(200);
+      response.send("Tweet Removed");
+    } else {
+      // console.log("FALSE");
+      response.status(401);
+      response.send("Invalid Request");
+    }
   }
 });
 
